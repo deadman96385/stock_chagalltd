@@ -2831,7 +2831,10 @@ exit2:
 	if (path_buf && !error) {
 		nd.path.dentry->d_sb->s_op->unlink_callback(nd.path.dentry->d_sb,
 			propagate_path);
+	}
+	if (path_buf) {
 		kfree(path_buf);
+		path_buf = NULL;
 	}
 exit1:
 	path_put(&nd.path);
@@ -2932,7 +2935,10 @@ exit3:
 	mutex_unlock(&nd.path.dentry->d_inode->i_mutex);
 	if (path_buf && !error) {
 		inode->i_sb->s_op->unlink_callback(inode->i_sb, propagate_path);
+	}
+	if (path_buf) {
 		kfree(path_buf);
+		path_buf = NULL;
 	}
 	if (inode)
 		iput(inode);	/* truncate the inode here */

@@ -2205,6 +2205,11 @@ static int max77803_muic_handle_attach(struct max77803_muic_info *info,
 	u8 adc, adclow, vbvolt, chgtyp, chgdetrun, adc1k, dxovp;
 	int ret = 0;
 
+	/* WA for detach 102k*/
+	struct i2c_client *client = info->muic;
+	u8 cdetctrl1_val;
+	int chgdeten;
+
 	adc = status1 & STATUS1_ADC_MASK;
 	adclow = status1 & STATUS1_ADCLOW_MASK;
 	adc1k = status1 & STATUS1_ADC1K_MASK;
@@ -2320,6 +2325,16 @@ static int max77803_muic_handle_attach(struct max77803_muic_info *info,
 					__func__);
 
 			info->cable_type = CABLE_TYPE_NONE_MUIC;
+			
+			/*WA for detach 102k*/
+			ret = max77803_read_reg(client, MAX77803_MUIC_REG_CDETCTRL1, &cdetctrl1_val);
+			chgdeten = cdetctrl1_val & CHGDETEN_MASK;
+			if(!chgdeten)
+			{
+				cdetctrl1_val |= (1 << 0);
+				max77803_write_reg(info->max77803->muic,
+					MAX77803_MUIC_REG_CDETCTRL1, cdetctrl1_val);
+			}
 		}
 		break;
 #endif	/* CONFIG_MUIC_MAX77888_SUPPORT_PS_CABLE */

@@ -913,6 +913,11 @@ static ssize_t store_cmd(struct device *dev, struct device_attribute
 	int param_cnt = 0;
 	int ret;
 
+	if (count >= TSP_CMD_STR_LEN) {
+		printk(KERN_ERR "%s: overflow command length\n", __func__);
+		return -EINVAL;
+	}
+
 	if (sysfs_data->cmd_is_running == true) {
 		dev_err(&client->dev, "tsp_cmd: other cmd is running.\n");
 		goto err_out;
@@ -974,7 +979,7 @@ static ssize_t store_cmd(struct device *dev, struct device_attribute
 				param_cnt++;
 			}
 			cur++;
-		} while (cur - buf <= len);
+		} while ((cur - buf <= len) && (param_cnt < TSP_CMD_PARAM_NUM));
 	}
 
 	dev_info(&client->dev, "cmd = %s\n", tsp_cmd_ptr->cmd_name);

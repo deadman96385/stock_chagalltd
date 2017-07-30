@@ -630,4 +630,6 @@ CONFIG_TIGHT_PGDAT_BALANCE=y
 CONFIG_VNSWAP=y
 CONFIG_SWAP_ENABLE_READAHEAD=n
 
+CONFIG_MMAP_READAROUND_LIMIT=16
+
 # do not edit below this line, we need a blank line at the end of file.

@@ -1021,11 +1021,7 @@ sec_battery_platform_data_t sec_battery_pdata = {
 		SEC_BATTERY_FULL_CONDITION_NOTIMEFULL |
 		SEC_BATTERY_FULL_CONDITION_VCELL,
 #if defined(CONFIG_CHAGALL) || defined(CONFIG_KLIMT)
-#if defined(CONFIG_CHAGALL)
 	.full_condition_soc = 93,
-#else
-	.full_condition_soc = 95,
-#endif
 	.full_condition_vcell = 4250,
 #else
 	.full_condition_soc = 97,
@@ -1037,14 +1033,18 @@ sec_battery_platform_data_t sec_battery_pdata = {
 		SEC_BATTERY_RECHARGE_CONDITION_AVGVCELL,
 	.recharge_condition_soc = 98,
 	.recharge_condition_avgvcell = 4150,
+#if defined(CONFIG_CHAGALL) || defined(CONFIG_KLIMT)
+	.recharge_condition_vcell = 4260,
+#else
 	.recharge_condition_vcell = 4280,
+#endif
 #if defined(CONFIG_BATTERY_SWELLING)
 #if defined(CONFIG_CHAGALL) || defined(CONFIG_KLIMT)
 	.swelling_high_temp_block = 450,
 	.swelling_high_temp_recov = 400,
 	.swelling_low_temp_block = 100,
 	.swelling_low_temp_recov = 150,
-	.swelling_normal_float_voltage = 4350,
+	.swelling_normal_float_voltage = 4340,
 	.swelling_drop_float_voltage = 4200,
 	.swelling_high_rechg_voltage = 4150,
 	.swelling_low_rechg_voltage = 4050,
@@ -1060,7 +1060,7 @@ sec_battery_platform_data_t sec_battery_pdata = {
 	.swelling_low_temp_block = 100,
 	.swelling_low_temp_recov = 150,
 	.swelling_drop_float_voltage = 4200,
-	.swelling_normal_float_voltage = 4350,
+	.swelling_normal_float_voltage = 4340,
 	.swelling_high_rechg_voltage = 4150,
 	.swelling_low_rechg_voltage = 4050,
 	.swelling_block_time = 600,
@@ -1103,7 +1103,7 @@ sec_battery_platform_data_t sec_battery_pdata = {
 	.chg_polarity_status = 0,
 	.chg_irq = 0,
 	.chg_irq_attr = IRQF_TRIGGER_FALLING,
-	.chg_float_voltage = 4350,
+	.chg_float_voltage = 4340,
 };
 
 #define SEC_FG_I2C_ID	18

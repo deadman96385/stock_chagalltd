@@ -21,7 +21,7 @@
  * software in any way with any other Broadcom software provided under a license
  * other than the GPL, without Broadcom's express prior written consent.
  *
- * $Id: wl_cfg80211.c 640717 2016-05-30 11:29:19Z $
+ * $Id: wl_cfg80211.c 657638 2016-09-02 03:08:32Z $
  */
 /* */
 #include <typedefs.h>
@@ -164,6 +164,30 @@ enum abiss_event_type {
 	AIBSS_EVENT_TXFAIL
 };
 #endif
+
+#if defined(STRICT_GCC_WARNINGS) && defined(__GNUC__) && (__GNUC__ > 4 || (__GNUC__ == \
+	4 && __GNUC_MINOR__ >= 6))
+#define BCM_SET_LIST_FIRST_ENTRY(entry, ptr, type, member) \
+	_Pragma("GCC diagnostic push") \
+_Pragma("GCC diagnostic ignored \"-Wcast-qual\"") \
+(entry) = list_first_entry((ptr), type, member); \
+_Pragma("GCC diagnostic pop") \
+
+#define BCM_SET_CONTAINER_OF(entry, ptr, type, member) \
+	_Pragma("GCC diagnostic push") \
+_Pragma("GCC diagnostic ignored \"-Wcast-qual\"") \
+entry = container_of((ptr), type, member); \
+_Pragma("GCC diagnostic pop") \
+
+#else
+#define BCM_SET_LIST_FIRST_ENTRY(entry, ptr, type, member) \
+	(entry) = list_first_entry((ptr), type, member); \
+
+#define BCM_SET_CONTAINER_OF(entry, ptr, type, member) \
+	entry = container_of((ptr), type, member); \
+
+#endif /* STRICT_GCC_WARNINGS */
+
 
 #ifdef WL_RELMCAST
 enum rmc_event_type {
@@ -442,7 +466,7 @@ static int wl_cfg80211_sched_scan_stop(struct wiphy *wiphy, struct net_device *d
  */
 static s32 wl_create_event_handler(struct bcm_cfg80211 *cfg);
 static void wl_destroy_event_handler(struct bcm_cfg80211 *cfg);
-static s32 wl_event_handler(void *data);
+static void wl_event_handler(struct work_struct *work_data);
 static void wl_init_eq(struct bcm_cfg80211 *cfg);
 static void wl_flush_eq(struct bcm_cfg80211 *cfg);
 static unsigned long wl_lock_eq(struct bcm_cfg80211 *cfg);
@@ -453,7 +477,6 @@ static struct wl_event_q *wl_deq_event(struct bcm_cfg80211 *cfg);
 static s32 wl_enq_event(struct bcm_cfg80211 *cfg, struct net_device *ndev, u32 type,
 	const wl_event_msg_t *msg, void *data);
 static void wl_put_event(struct wl_event_q *e);
-static void wl_wakeup_event(struct bcm_cfg80211 *cfg);
 static s32 wl_notify_connect_status_ap(struct bcm_cfg80211 *cfg, struct net_device *ndev,
 	const wl_event_msg_t *e, void *data);
 static s32 wl_notify_connect_status(struct bcm_cfg80211 *cfg,
@@ -10558,19 +10581,26 @@ static s32 wl_create_event_handler(struct bcm_cfg80211 *cfg)
 	int ret = 0;
 	WL_DBG(("Enter \n"));
 
-	/* Do not use DHD in cfg driver */
-	cfg->event_tsk.thr_pid = -1;
+	/* Allocate workqueue for event */
+	if (!cfg->event_workq) {
+		cfg->event_workq = alloc_workqueue("dhd_eventd", WQ_MEM_RECLAIM | WQ_HIGHPRI, 0);
+	}
 
-	PROC_START(wl_event_handler, cfg, &cfg->event_tsk, 0, "wl_event_handler");
-	if (cfg->event_tsk.thr_pid < 0)
+	if (!cfg->event_workq) {
 		ret = -ENOMEM;
+	} else {
+		INIT_WORK(&cfg->event_work, wl_event_handler);
+	}
 	return ret;
 }
 
 static void wl_destroy_event_handler(struct bcm_cfg80211 *cfg)
 {
-	if (cfg->event_tsk.thr_pid >= 0)
-		PROC_STOP(&cfg->event_tsk);
+	if (cfg && cfg->event_workq) {
+		cancel_work_sync(&cfg->event_work);
+		destroy_workqueue(cfg->event_workq);
+		cfg->event_workq = NULL;
+	}
 }
 
 void wl_terminate_event_handler(void)
@@ -11688,75 +11718,55 @@ void wl_cfg80211_detach(void *para)
 	 */
 }
 
-static void wl_wakeup_event(struct bcm_cfg80211 *cfg)
-{
-	dhd_pub_t *dhd = (dhd_pub_t *)(cfg->pub);
-
-	if (dhd->up && (cfg->event_tsk.thr_pid >= 0)) {
-		up(&cfg->event_tsk.sema);
-	}
-}
-
-static s32 wl_event_handler(void *data)
+static void wl_event_handler(struct work_struct *work_data)
 {
 	struct bcm_cfg80211 *cfg = NULL;
 	struct wl_event_q *e;
-	tsk_ctl_t *tsk = (tsk_ctl_t *)data;
 	bcm_struct_cfgdev *cfgdev = NULL;
 
-	cfg = (struct bcm_cfg80211 *)tsk->parent;
-
-	WL_ERR(("tsk Enter, tsk = 0x%p\n", tsk));
-
-	while (down_interruptible (&tsk->sema) == 0) {
-		SMP_RD_BARRIER_DEPENDS();
-		if (tsk->terminated) {
-			break;
-		}
-		while ((e = wl_deq_event(cfg))) {
-			WL_DBG(("event type (%d), if idx: %d\n", e->etype, e->emsg.ifidx));
-			/* All P2P device address related events comes on primary interface since
-			 * there is no corresponding bsscfg for P2P interface. Map it to p2p0
-			 * interface.
-			 */
+	WL_DBG(("Enter \n"));
+	BCM_SET_CONTAINER_OF(cfg, work_data, struct bcm_cfg80211, event_work);
+	DHD_EVENT_WAKE_LOCK(cfg->pub);
+	while ((e = wl_deq_event(cfg))) {
+		WL_DBG(("event type (%d), if idx: %d\n", e->etype, e->emsg.ifidx));
+		/* All P2P device address related events comes on primary interface since
+		 * there is no corresponding bsscfg for P2P interface. Map it to p2p0
+		 * interface.
+		 */
 #if defined(WL_CFG80211_P2P_DEV_IF)
-			if (WL_IS_P2P_DEV_EVENT(e) && (cfg->p2p_wdev)) {
-				cfgdev = bcmcfg_to_p2p_wdev(cfg);
-			} else {
-				struct net_device *ndev = NULL;
+		if (WL_IS_P2P_DEV_EVENT(e) && (cfg->p2p_wdev)) {
+			cfgdev = bcmcfg_to_p2p_wdev(cfg);
+		} else {
+			struct net_device *ndev = NULL;
 
-				ndev = dhd_idx2net((struct dhd_pub *)(cfg->pub), e->emsg.ifidx);
-				if (ndev)
-					cfgdev = ndev_to_wdev(ndev);
-			}
+			ndev = dhd_idx2net((struct dhd_pub *)(cfg->pub), e->emsg.ifidx);
+			if (ndev)
+				cfgdev = ndev_to_wdev(ndev);
+		}
 #elif defined(WL_ENABLE_P2P_IF)
-			if (WL_IS_P2P_DEV_EVENT(e) && (cfg->p2p_net)) {
-				cfgdev = cfg->p2p_net;
-			} else {
-				cfgdev = dhd_idx2net((struct dhd_pub *)(cfg->pub),
+		if (WL_IS_P2P_DEV_EVENT(e) && (cfg->p2p_net)) {
+			cfgdev = cfg->p2p_net;
+		} else {
+			cfgdev = dhd_idx2net((struct dhd_pub *)(cfg->pub),
 					e->emsg.ifidx);
-			}
+		}
 #endif /* WL_CFG80211_P2P_DEV_IF */
 
-			if (!cfgdev) {
+		if (!cfgdev) {
 #if defined(WL_CFG80211_P2P_DEV_IF)
-				cfgdev = bcmcfg_to_prmry_wdev(cfg);
+			cfgdev = bcmcfg_to_prmry_wdev(cfg);
 #elif defined(WL_ENABLE_P2P_IF)
-				cfgdev = bcmcfg_to_prmry_ndev(cfg);
+			cfgdev = bcmcfg_to_prmry_ndev(cfg);
 #endif /* WL_CFG80211_P2P_DEV_IF */
-			}
-			if (e->etype < WLC_E_LAST && cfg->evt_handler[e->etype]) {
-				cfg->evt_handler[e->etype] (cfg, cfgdev, &e->emsg, e->edata);
-			} else {
-				WL_DBG(("Unknown Event (%d): ignoring\n", e->etype));
-			}
-			wl_put_event(e);
-			DHD_EVENT_WAKE_UNLOCK(cfg->pub);
 		}
+		if (e->etype < WLC_E_LAST && cfg->evt_handler[e->etype]) {
+			cfg->evt_handler[e->etype] (cfg, cfgdev, &e->emsg, e->edata);
+		} else {
+			WL_DBG(("Unknown Event (%d): ignoring\n", e->etype));
+		}
+		wl_put_event(e);
 	}
-	WL_ERR(("was terminated\n"));
-	complete_and_exit(&tsk->completed, 0);
-	return 0;
+	DHD_EVENT_WAKE_UNLOCK(cfg->pub);
 }
 
 void
@@ -11776,7 +11786,7 @@ wl_cfg80211_event(struct net_device *ndev, const wl_event_msg_t * e, void *data)
 		return;
 	}
 
-	if (cfg->event_tsk.thr_pid == -1) {
+	if (cfg->event_workq == NULL) {
 		WL_ERR(("Event handler is not created\n"));
 		return;
 	}
@@ -11806,11 +11816,8 @@ wl_cfg80211_event(struct net_device *ndev, const wl_event_msg_t * e, void *data)
 		WL_DBG((" PNOEVENT: PNO_NET_LOST\n"));
 	}
 
-	DHD_EVENT_WAKE_LOCK(cfg->pub);
 	if (likely(!wl_enq_event(cfg, ndev, event_type, e, data))) {
-		wl_wakeup_event(cfg);
-	} else {
-		DHD_EVENT_WAKE_UNLOCK(cfg->pub);
+		queue_work(cfg->event_workq, &cfg->event_work);
 	}
 }
 
